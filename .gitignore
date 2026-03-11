@@ -1,0 +1,38 @@
+# Visual Studio user/workspace
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# VS Code state (keep only settings if you want to share them)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Build outputs
+bin/
+obj/
+**/bin/
+**/obj/
+*.exe
+*.pdb
+*.dll
+
+# NuGet
+packages/
+*.nupkg
+# Allow packages.config to be tracked
+!packages.config
+
+# Logs / backups / caches
+*.log
+*.cache
+*.vsidx
+*.ide
+*.tmp
+*.bak
+*.swp
+``
