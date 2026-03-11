@@ -181,18 +181,26 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
 
                 if (!string.IsNullOrWhiteSpace(pre.SqlFile))
                 {
+
                     var raw = pre.SqlFile;
-                    // Token replacement
+
+                    // 1) Strip SSMS batch separators (GO) — not supported by SqlClient.
+                    //    This preserves variable scope for DECLAREs (e.g., @err) across the whole script.
+                    raw = Regex.Replace(raw, @"(?mi)^\s*GO\s*(--.*)?$", string.Empty);
+
+                    // 2) Token replacement
                     var sql = raw.Replace("$$ENVIRONMENT$$", env)
                                  .Replace("$$AREA_CODE$$", area)
                                  .Replace("$$DB_NAME$$", dbName)
                                  .Replace("$$FILE_NAME$$", fileForArea);
 
-                    // Patch common pitfalls (as we saw earlier)
+
+
+                    // 3) Safety patches we already apply
                     sql = sql.Replace("@so_err", "@err");
-                    if (!sql.ToLowerInvariant().Contains("declare @start_job"))
+                    if (!Regex.IsMatch(sql, @"(?i)\bdeclare\s+@start_job\b"))
                         sql = "DECLARE @start_job datetime = GETDATE();\r\n" + sql;
-                    if (!sql.ToLowerInvariant().Contains("declare @err"))
+                    if (!Regex.IsMatch(sql, @"(?i)\bdeclare\s+@err\b"))
                         sql = "DECLARE @err nvarchar(4000);\r\n" + sql;
 
                     try
