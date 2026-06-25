@@ -16,6 +16,9 @@ namespace iSMSOverdue.InboundInvoice.Helper
         public string SqlMain;
         public string SqlFile;
         public BucketMapperModel Map;
+
+        public List<string> UploadPaths = new List<string>();
+        public bool HasUploadPaths;
     }
 
     public static class PreflightHelper
@@ -24,7 +27,7 @@ namespace iSMSOverdue.InboundInvoice.Helper
         {
             if (cfg == null) throw new ArgumentNullException("cfg");
 
-            ValidatePathsAndPermissions(cfg, log);
+            var (paths, hasUploads) = ValidatePathsAndPermissions(cfg, log);
             var map = ResolveS3Map(cfg.S3Bucket, cfg.JobName);
             ValidateAwsKeyDecrypt(cfg.FileKeyLocker);
 
@@ -44,11 +47,13 @@ namespace iSMSOverdue.InboundInvoice.Helper
                 DbUser = dbUser,
                 SqlMain = sqlMain,
                 SqlFile = sqlFile,
-                Map = map
+                Map = map,
+                UploadPaths = paths,
+                HasUploadPaths = hasUploads
             };
         }
 
-        private static void ValidatePathsAndPermissions(ArgumentModel cfg, Logger log)
+        private static (List<string> paths, bool hasUploads) ValidatePathsAndPermissions(ArgumentModel cfg, Logger log)
         {
             var missing = new List<string>();
             var reqFiles = new[]
@@ -69,35 +74,48 @@ namespace iSMSOverdue.InboundInvoice.Helper
             if (!Directory.Exists(cfg.CsvInbound))
                 Directory.CreateDirectory(cfg.CsvInbound);
 
-            var uploads = FileHelper.ReadFile(cfg.FileUpload);
-            if (uploads.Count == 0) throw new InvalidOperationException("Preflight: fileupload.txt has no lines.");
+            var uploadsRaw = FileHelper.ReadFile(cfg.FileUpload);
+            var uploadPaths = uploadsRaw
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s.Trim())
+                .ToList();
 
-            var primary = uploads[0].Trim();
-            if (string.IsNullOrWhiteSpace(primary))
-                throw new InvalidOperationException("Preflight: first line of fileupload.txt is empty.");
+            var hasUploads = uploadPaths.Count > 0;
 
-            if (!Directory.Exists(primary))
-                Directory.CreateDirectory(primary);
-
-            // simple write tests
-            WriteTest(primary);
-            WriteTest(cfg.CsvInbound);
-
-            foreach (var s in uploads.Skip(1))
+            if (hasUploads)
             {
-                var d = s.Trim();
-                if (string.IsNullOrWhiteSpace(d)) continue;
-                if (!Directory.Exists(d)) Directory.CreateDirectory(d);
-                WriteTest(d);
+                // Primary + replicas
+                var primary = uploadPaths[0];
+                if (!Directory.Exists(primary)) Directory.CreateDirectory(primary);
+                WriteTest(primary);
+
+                foreach (var d in uploadPaths.Skip(1))
+                {
+                    if (!Directory.Exists(d)) Directory.CreateDirectory(d);
+                    WriteTest(d);
+                }
+
+                log.Info("Preflight: fileupload paths OK. Primary + replicas validated.");
+            }
+            else
+            {
+                // NEW: do not fail; just inform
+                log.Info("Preflight: fileupload.txt is empty. S3 operations will be skipped.");
             }
 
-            log.Info("Preflight: paths & permissions OK.");
+            // Also basic write test for csvInbound (we did mkdir above already)
+            WriteTest(cfg.CsvInbound);
+
+            // We still validate S3 map + key decrypt elsewhere to keep the environment consistent,
+            // but ServiceInboundJob will skip S3 when hasUploads==false.
+            return (uploadPaths, hasUploads);
         }
 
         private static void WriteTest(string dir)
         {
-            var p = Path.Combine(dir, $"_preflight_write_{Guid.NewGuid().ToString("N")}.tmp");
-            try { File.WriteAllText(p, "ok"); } finally { try { if (File.Exists(p)) File.Delete(p); } catch { } }
+            var p = Path.Combine(dir, $"_preflight_write_{Guid.NewGuid():N}.tmp");
+            try { File.WriteAllText(p, "ok"); }
+            finally { try { if (File.Exists(p)) File.Delete(p); } catch { } }
         }
 
         private static BucketMapperModel ResolveS3Map(string csvPath, string jobName)
@@ -181,7 +199,6 @@ namespace iSMSOverdue.InboundInvoice.Helper
             return File.ReadAllText(p);
         }
 
-        // Block typical "SELECT inside PRINT/CONCAT" pattern that caused your earlier crash.
         private static void ValidateSqlScript(string sqlText, string tag)
         {
             if (string.IsNullOrWhiteSpace(sqlText)) return;

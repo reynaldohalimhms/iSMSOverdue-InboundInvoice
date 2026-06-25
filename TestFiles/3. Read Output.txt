@@ -1,0 +1,62 @@
+--Check
+select top 20 * from SMSIndonesia_SUB_QAS.dbo.Invoice inv 
+join SMSIndonesia_SUB_QAS.dbo.SalesOrder so on so.salesorderid = inv.invoice_salesorderid
+where 
+	inv.InvoiceLegalNumber IN (
+		'TSUB0154608611',
+		'TSUB0154608610',
+		'TSUB015460864',
+		'TSUB015460866',
+		'TSUB015460867',
+		'TSUB015460868',
+		'TSUB015460863',
+		'BSUB008460481',
+		'BSUB008460482',
+		'TSUB008460481',
+		'BSUB011460414',
+		'BSUB011460412',
+		'BSUB011460411',
+		'BSUB011460413',
+		'OSUB03546048001',
+		'OSUB00646045001',
+		'OSUB01546045001',
+		'OSUB01946045001',
+		'OSUB03546045001',
+		'OSUB01746045001'
+		);
+
+-- Output
+SELECT
+		inv.InvoiceLegalNumber,
+		so.SalesOrderCode,
+		so.SalesOrderConfirmationNumber,
+		so.SalesOrderStatus,
+		so.SalesOrderIsRequestForCancellation,
+		so.SalesOrderModDate
+	FROM SMSIndonesia_SUB_QAS.dbo.SalesOrder so
+	LEFT JOIN SMSIndonesia_SUB_QAS.dbo.Invoice inv 
+		ON so.SalesOrderId = inv.Invoice_SalesOrderId
+	WHERE 
+		inv.InvoiceLegalNumber IN (
+		'TSUB0154608611',
+		'TSUB0154608610',
+		'TSUB015460864',
+		'TSUB015460866',
+		'TSUB015460867',
+		'TSUB015460868',
+		'TSUB015460863',
+		'BSUB008460481',
+		'BSUB008460482',
+		'TSUB008460481',
+		'BSUB011460414',
+		'BSUB011460412',
+		'BSUB011460411',
+		'BSUB011460413',
+		'OSUB03546048001',
+		'OSUB00646045001',
+		'OSUB01546045001',
+		'OSUB01946045001',
+		'OSUB03546045001',
+		'OSUB01746045001'
+		)
+		Order by so.SalesOrderModDate desc;

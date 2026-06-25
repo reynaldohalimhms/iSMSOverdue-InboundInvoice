@@ -1,0 +1,44 @@
+select distinct top 20 
+inv.invoicelegalnumber, inv.invoiceissuedate,
+so.SalesOrderConfirmationNumber, so.SalesOrderCode
+from SMSIndonesia_SUB_QAS.dbo.Invoice inv
+join SMSIndonesia_SUB_QAS.dbo.SalesOrder so on so.salesorderid = inv.invoice_salesorderid
+where inv.InvoiceLegalNumber like '%JOW%'
+order by inv.invoiceissuedate desc;
+
+SELECT top 100
+        inv.InvoiceLegalNumber,
+        so.SalesOrderCode,
+        so.SalesOrderConfirmationNumber,
+        so.SalesOrderStatus,
+        so.SalesOrderIsRequestForCancellation,
+        so.SalesOrderModDate
+    FROM SMSIndonesia_SUB_QAS.dbo.SalesOrder so
+    LEFT JOIN SMSIndonesia_SUB_QAS.dbo.Invoice inv 
+        ON so.SalesOrderId = inv.Invoice_SalesOrderId
+    WHERE so.salesorderconfirmationnumber like '%212%' order by so.SalesOrderConfirmationNumber asc;
+
+
+Update SMSIndonesia_SUB_QAS.dbo.SalesOrder set salesorderconfirmationnumber = '212' where salesordercode in
+    (
+    'SUB5529561',
+    'SUB5529560',
+    'SUB5529556',
+    'SUB5529558',
+    'SUB5529557',
+    'SUB5529555',
+    'SUB5529559',
+    'SUB5529533',
+    'SUB5529535',
+    'SUB5529534',
+    'SUB5529526',
+    'SUB5529524',
+    'SUB5529523',
+    'SUB5529525',
+    'SUB5529531',
+    'SUB5529494',
+    'SUB5529493',
+    'SUB5529504',
+    'SUB5529492',
+    'SUB5529505'
+    );
