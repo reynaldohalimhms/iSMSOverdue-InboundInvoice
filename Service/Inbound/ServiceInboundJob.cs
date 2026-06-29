@@ -92,6 +92,7 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
 
             // 3) READ CSVs INTO STAGING TABLE (Users.dbo.iSMSOverdue_InvoiceTemp)
             var stagingAll = new DataTable();
+
             stagingAll.Columns.Add("invoice_legal_number", typeof(string));
             stagingAll.Columns.Add("status", typeof(string));
             stagingAll.Columns.Add("csv_filename", typeof(string));
@@ -107,6 +108,7 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
             {
                 var zipName = Path.GetFileName(dir).Replace("_tempfile", ".zip");
                 var seq = ExtractSequenceNumber(Path.GetFileNameWithoutExtension(zipName));
+
                 var csvs = Directory.GetFiles(dir, "*.csv");
 
                 foreach (var csv in csvs)
@@ -126,7 +128,12 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
             // 4) BULK INSERT TO STAGING
             if (stagingAll.Rows.Count > 0)
             {
-                await DBHelper.BulkInsert(pre.DbUser, stagingAll, "Users.dbo.iSMSOverdue_InvoiceTemp");
+                await DBHelper.BulkInsert(
+                    pre.DbUser.First(),
+                    stagingAll,
+                    "Users.dbo.iSMSOverdue_InvoiceTemp"
+                );
+
                 _log.Info($"Staging insert done. Rows: {stagingAll.Rows.Count:N0}");
             }
             else
@@ -134,99 +141,156 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
                 _log.Info("No CSV rows found; nothing to insert into staging.");
             }
 
-            // 5) PER-AREA EXECUTION (MODE B)
-            // Distinct areas from stagingAll: area = RIGHT(LEFT(invoice_legal_number, 4), 3)
-            var areas = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // ===================== BUILD AREA FROM STAGING =====================
+            var stagingAreas = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (DataRow row in stagingAll.Rows)
+            {
+                var inv = Convert.ToString(row["invoice_legal_number"]);
+                var area = ExtractAreaFromInvoice(inv);
+
+                if (!string.IsNullOrWhiteSpace(area))
+                    stagingAreas.Add(area);
+            }
+
+            // ===================== BUILD DBUSER AREA MAP =====================
+            var dbUserMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var conn in pre.DbUser)
+            {
+                var catalog = ExtractInitialCatalog(conn);
+
+                if (string.IsNullOrWhiteSpace(catalog))
+                    continue;
+
+                var parts = catalog.Split('_');
+
+                if (parts.Length < 3)
+                {
+                    _log.Warn($"Invalid catalog format: {catalog}");
+                    continue;
+                }
+
+                var area = parts[1]; // middle part
+
+                if (!dbUserMap.ContainsKey(area))
+                    dbUserMap[area] = conn;
+            }
+
+            // ===================== FILE PER AREA (ORIGINAL LOGIC) =====================
+            var fileByArea = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (DataRow r in stagingAll.Rows)
             {
                 var inv = Convert.ToString(r["invoice_legal_number"]);
-                var a = ExtractAreaFromInvoice(inv);
-                if (!string.IsNullOrEmpty(a)) areas.Add(a);
+                var area = ExtractAreaFromInvoice(inv);
+
+                if (string.IsNullOrWhiteSpace(area)) continue;
+
+                if (!fileByArea.ContainsKey(area))
+                    fileByArea[area] = Convert.ToString(r["csv_filename"]) ?? "batch";
             }
 
             var env = ConfigurationManager.AppSettings["Environment"] ?? "DEV";
-            var dbName = ExtractInitialCatalog(pre.DbUser);
 
-            // Choose a filename representative per area
-            var fileByArea = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (DataRow r in stagingAll.Rows)
+            //dev log:
+            _log.Info($"stagingAreas: {string.Join(", ", stagingAreas)}");
+
+            // ===================== FINAL EXECUTION =====================
+            foreach (var kv in pre.DbMain)
             {
-                var inv = Convert.ToString(r["invoice_legal_number"]);
-                var a = ExtractAreaFromInvoice(inv);
-                if (string.IsNullOrEmpty(a)) continue;
+                var areaCode = kv.Key;
 
-                if (!fileByArea.ContainsKey(a))
-                    fileByArea[a] = Convert.ToString(r["csv_filename"]) ?? "batch";
-            }
+                // must exist in staging
+                // if (!stagingAreas.Contains(areaCode))
+                // {
+                //     _log.Info($"Skip area {areaCode}: not found in staging");
+                //     continue;
+                // }
 
-            // Execute per area: counter (optional) then inbound_invoice
-            foreach (var area in areas)
-            {
-                string fileForArea = fileByArea.ContainsKey(area) ? fileByArea[area] : "batch";
+                // must exist in DbUser
+                if (!dbUserMap.TryGetValue(areaCode, out var conn))
+                {
+                    _log.Warn($"Skip area {areaCode}: not found in DbUser catalog");
+                    continue;
+                }
 
+                var dbName = ExtractInitialCatalog(conn); // ✅ AREA DB
+                var fileForArea = fileByArea.ContainsKey(areaCode)
+                    ? fileByArea[areaCode]
+                    : "batch";
+
+                _log.Info($"Processing area {areaCode} | DB={dbName} | FILE={fileForArea}");
+
+                // ===================== COUNTER =====================
                 if (!string.IsNullOrWhiteSpace(pre.SqlMain))
                 {
-                    var sqlCounter = pre.SqlMain; // Execute counter per area as in BV1 transaction flow
                     try
                     {
-                        await DBHelper.ExecuteNonQuery(pre.DbUser, sqlCounter);
-                        _log.Info($"Counter executed for area {area}.");
+                        await DBHelper.ExecuteNonQuery(conn, pre.SqlMain);
+                        _log.Info($"Counter executed for area {areaCode}.");
                     }
                     catch (Exception ex)
                     {
-                        _log.Error(ex, $"Counter failed for area {area}.");
-                        // Continue; your BV1 flow tolerates partials and logs
+                        _log.Error(ex, $"Counter failed for area {areaCode}.");
                     }
                 }
 
+                // ===================== MAIN SQL =====================
                 if (!string.IsNullOrWhiteSpace(pre.SqlFile))
                 {
-
                     var raw = pre.SqlFile;
 
                     // 1) Strip SSMS batch separators (GO) — not supported by SqlClient.
                     //    This preserves variable scope for DECLAREs (e.g., @err) across the whole script.
-                    raw = Regex.Replace(raw, @"(?mi)^\s*GO\s*(--.*)?$", string.Empty);
+                    raw = Regex.Replace(raw, @"(?mi)^\s*GO\s*(--.*)?$", "");
 
                     // 2) Token replacement
-                    var sql = raw.Replace("$$ENVIRONMENT$$", env)
-                                 .Replace("$$AREA_CODE$$", area)
-                                 .Replace("$$DB_NAME$$", dbName)
-                                 .Replace("$$FILE_NAME$$", fileForArea);
-
-
+                    var sql = raw
+                        .Replace("$$ENVIRONMENT$$", env)
+                        .Replace("$$AREA_CODE$$", areaCode)
+                        .Replace("$$DB_NAME$$", dbName)
+                        .Replace("$$FILE_NAME$$", fileForArea);
 
                     // 3) Safety patches we already apply
                     sql = sql.Replace("@so_err", "@err");
+
                     if (!Regex.IsMatch(sql, @"(?i)\bdeclare\s+@start_job\b"))
                         sql = "DECLARE @start_job datetime = GETDATE();\r\n" + sql;
+
                     if (!Regex.IsMatch(sql, @"(?i)\bdeclare\s+@err\b"))
                         sql = "DECLARE @err nvarchar(4000);\r\n" + sql;
 
                     try
                     {
-                        var result = await DBHelper.Execute(pre.DbUser, sql);
-                        if (result != null && result.Rows.Count > 0 && result.Columns.Contains("msg"))
+                        var result = await DBHelper.Execute(conn, sql);
+
+                        if (result != null &&
+                            result.Columns.Contains("msg") &&
+                            result.Rows.Count > 0)
                         {
                             var msg = Convert.ToString(result.Rows[0]["msg"]);
+
                             if (!string.IsNullOrWhiteSpace(msg))
-                                _log.Error($"inbound_invoice returned msg for area {area}: {msg}");
+                                _log.Error($"inbound_invoice returned msg for area {areaCode}: {msg}");
+                            else
+                                _log.Info($"✅ Area {areaCode}: success");
                         }
                         else
                         {
-                            _log.Info($"✅ {area}: Execute inbound_invoice success.");
+                            _log.Info($"✅ {areaCode}: Execute inbound_invoice success.");
                         }
                     }
                     catch (Exception ex)
                     {
-                        _log.Error(ex, $"Execute inbound_invoice failed for area {area}.");
+                        _log.Error(ex, $"Execute inbound_invoice failed for area {areaCode}.");
                     }
                 }
             }
 
             // 6) CLEANUP STAGING (TRUNCATE then fallback DELETE)
-            await CleanupStaging(pre.DbUser);
-
+            await CleanupStaging(pre.DbUser.First());
+            
             // 7) CLEANUP TEMP FOLDERS AND ZIPS
             CleanupTempAndZips(cfg.CsvInbound, tempDirs);
 

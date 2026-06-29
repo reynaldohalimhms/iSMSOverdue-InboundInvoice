@@ -11,12 +11,11 @@ namespace iSMSOverdue.InboundInvoice.Helper
 {
     public sealed class PreflightResult
     {
-        public string DbMain;
-        public string DbUser;
+        public Dictionary<string, string> DbMain;
+        public List<string> DbUser;
         public string SqlMain;
         public string SqlFile;
         public BucketMapperModel Map;
-
         public List<string> UploadPaths = new List<string>();
         public bool HasUploadPaths;
     }
@@ -25,7 +24,7 @@ namespace iSMSOverdue.InboundInvoice.Helper
     {
         public static PreflightResult RunAll(ArgumentModel cfg, Logger log)
         {
-            if (cfg == null) throw new ArgumentNullException("cfg");
+            if (cfg == null) throw new ArgumentNullException(nameof(cfg));
 
             var (paths, hasUploads) = ValidatePathsAndPermissions(cfg, log);
             var map = ResolveS3Map(cfg.S3Bucket, cfg.JobName);
@@ -53,46 +52,100 @@ namespace iSMSOverdue.InboundInvoice.Helper
             };
         }
 
-        private static (List<string> paths, bool hasUploads) ValidatePathsAndPermissions(ArgumentModel cfg, Logger log)
+        private static Dictionary<string, string> ResolveDbMain(string path)
+        {
+            var lines = File.ReadAllLines(path);
+
+            if (lines.Length < 2)
+                throw new InvalidOperationException("DBConnectionMain must contain header and at least one row.");
+
+            var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            // Skip header
+            foreach (var line in lines.Skip(1))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                var parts = line.Split(new[] { ',' }, 3);
+
+                if (parts.Length < 3)
+                    throw new InvalidOperationException("Invalid DBConnectionMain format.");
+
+                var area = parts[0].Trim();
+                var conn = parts[2].Trim();
+
+                if (!string.IsNullOrEmpty(area) && !string.IsNullOrEmpty(conn))
+                {
+                    dict[area] = conn;
+                }
+            }
+
+            if (dict.Count == 0)
+                throw new InvalidOperationException("No valid DBConnectionMain entries.");
+
+            return dict;
+        }
+
+        private static List<string> ResolveDbUser(string path)
+        {
+            var lines = File.ReadAllLines(path)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .ToList();
+
+            if (lines.Count == 0)
+                throw new InvalidOperationException("DBConnection must contain at least one connection.");
+
+            return lines;
+        }
+
+        private static (List<string>, bool) ValidatePathsAndPermissions(ArgumentModel cfg, Logger log)
         {
             var missing = new List<string>();
-            var reqFiles = new[]
+
+            var requiredFiles = new[]
             {
-                cfg.DBConnection, cfg.DBConnectionMain, cfg.FileKeyLocker,
-                cfg.FileUpload, cfg.S3Bucket, cfg.Logger
+                cfg.DBConnection,
+                cfg.DBConnectionMain,
+                cfg.FileKeyLocker,
+                cfg.FileUpload,
+                cfg.S3Bucket,
+                cfg.Logger
             };
 
-            foreach (var f in reqFiles)
-                if (string.IsNullOrWhiteSpace(f) || !File.Exists(f)) missing.Add(f ?? "(null)");
+            foreach (var f in requiredFiles)
+            {
+                if (string.IsNullOrWhiteSpace(f) || !File.Exists(f))
+                    missing.Add(f ?? "(null)");
+            }
 
             if (missing.Count > 0)
-                throw new InvalidOperationException("Preflight: required files missing:\n - " + string.Join("\n - ", missing.ToArray()));
+                throw new InvalidOperationException(
+                    "Missing files:\n - " + string.Join("\n - ", missing));
 
             if (string.IsNullOrWhiteSpace(cfg.CsvInbound))
-                throw new InvalidOperationException("Preflight: CsvInbound path is empty.");
+                throw new InvalidOperationException("CsvInbound is empty.");
 
             if (!Directory.Exists(cfg.CsvInbound))
                 Directory.CreateDirectory(cfg.CsvInbound);
 
             var uploadsRaw = FileHelper.ReadFile(cfg.FileUpload);
+
             var uploadPaths = uploadsRaw
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .Select(s => s.Trim())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
                 .ToList();
 
             var hasUploads = uploadPaths.Count > 0;
 
             if (hasUploads)
             {
-                // Primary + replicas
-                var primary = uploadPaths[0];
-                if (!Directory.Exists(primary)) Directory.CreateDirectory(primary);
-                WriteTest(primary);
-
-                foreach (var d in uploadPaths.Skip(1))
+                foreach (var path in uploadPaths)
                 {
-                    if (!Directory.Exists(d)) Directory.CreateDirectory(d);
-                    WriteTest(d);
+                    if (!Directory.Exists(path))
+                        Directory.CreateDirectory(path);
+
+                    WriteTest(path);
                 }
 
                 log.Info("Preflight: fileupload paths OK. Primary + replicas validated.");
@@ -113,9 +166,11 @@ namespace iSMSOverdue.InboundInvoice.Helper
 
         private static void WriteTest(string dir)
         {
-            var p = Path.Combine(dir, $"_preflight_write_{Guid.NewGuid():N}.tmp");
-            try { File.WriteAllText(p, "ok"); }
-            finally { try { if (File.Exists(p)) File.Delete(p); } catch { } }
+            var file = Path.Combine(dir, $"_test_{Guid.NewGuid():N}.tmp");
+
+            File.WriteAllText(file, "ok");
+
+            try { File.Delete(file); } catch { }
         }
 
         private static BucketMapperModel ResolveS3Map(string csvPath, string jobName)
@@ -155,48 +210,12 @@ namespace iSMSOverdue.InboundInvoice.Helper
             }
         }
 
-        private static string ResolveDbMain(string path)
+        private static string ReadSqlIfExists(string path)
         {
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                throw new InvalidOperationException("Preflight: DBConnectionMain not found.");
+                return null;
 
-            var lines = FileHelper.ReadFile(path);
-            if (lines.Count == 0) throw new InvalidOperationException("Preflight: DBConnectionMain empty.");
-
-            if (lines[0].Trim().StartsWith("area_code", StringComparison.OrdinalIgnoreCase))
-            {
-                if (lines.Count < 2) throw new InvalidOperationException("Preflight: DBConnectionMain CSV header without rows.");
-                var first = lines[1];
-                var parts = first.Split(new[] { ',' }, 3);
-                if (parts.Length < 3) throw new InvalidOperationException("Preflight: DBConnectionMain CSV malformed.");
-                var conn = parts[2].Trim();
-                if (string.IsNullOrWhiteSpace(conn)) throw new InvalidOperationException("Preflight: DBConnectionMain CSV db_connection empty.");
-                return conn;
-            }
-            else
-            {
-                var conn = lines[0].Trim();
-                if (string.IsNullOrWhiteSpace(conn)) throw new InvalidOperationException("Preflight: DBConnectionMain plain string empty.");
-                return conn;
-            }
-        }
-
-        private static string ResolveDbUser(string path)
-        {
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                throw new InvalidOperationException("Preflight: DBConnection file not found.");
-
-            var lines = FileHelper.ReadFile(path);
-            var first = lines.Count > 0 ? lines[0].Trim() : null;
-            if (string.IsNullOrWhiteSpace(first)) throw new InvalidOperationException("Preflight: DBConnection empty.");
-            return first;
-        }
-
-        private static string ReadSqlIfExists(string p)
-        {
-            if (string.IsNullOrWhiteSpace(p)) return null;
-            if (!File.Exists(p)) return null;
-            return File.ReadAllText(p);
+            return File.ReadAllText(path);
         }
 
         private static void ValidateSqlScript(string sqlText, string tag)
