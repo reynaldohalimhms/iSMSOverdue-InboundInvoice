@@ -129,7 +129,7 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
             if (stagingAll.Rows.Count > 0)
             {
                 await DBHelper.BulkInsert(
-                    pre.DbUser.First(),
+                    pre.Db.First(),
                     stagingAll,
                     "Users.dbo.iSMSOverdue_InvoiceTemp"
                 );
@@ -153,10 +153,10 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
                     stagingAreas.Add(area);
             }
 
-            // ===================== BUILD DBUSER AREA MAP =====================
-            var dbUserMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // ===================== BUILD DB AREA MAP =====================
+            var dbMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var conn in pre.DbUser)
+            foreach (var conn in pre.Db)
             {
                 var catalog = ExtractInitialCatalog(conn);
 
@@ -173,8 +173,8 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
 
                 var area = parts[1]; // middle part
 
-                if (!dbUserMap.ContainsKey(area))
-                    dbUserMap[area] = conn;
+                if (!dbMap.ContainsKey(area))
+                    dbMap[area] = conn;
             }
 
             // ===================== FILE PER AREA (ORIGINAL LOGIC) =====================
@@ -208,10 +208,10 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
                 //     continue;
                 // }
 
-                // must exist in DbUser
-                if (!dbUserMap.TryGetValue(areaCode, out var conn))
+                // must exist in Db
+                if (!dbMap.TryGetValue(areaCode, out var conn))
                 {
-                    _log.Warn($"Skip area {areaCode}: not found in DbUser catalog");
+                    _log.Warn($"Skip area {areaCode}: not found in Db catalog");
                     continue;
                 }
 
@@ -289,7 +289,7 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
             }
 
             // 6) CLEANUP STAGING (TRUNCATE then fallback DELETE)
-            await CleanupStaging(pre.DbUser.First());
+            await CleanupStaging(pre.Db.First());
             
             // 7) CLEANUP TEMP FOLDERS AND ZIPS
             CleanupTempAndZips(cfg.CsvInbound, tempDirs);
@@ -463,11 +463,11 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
             return m.Success ? m.Groups[1].Value.Trim() : "";
         }
 
-        private static async Task CleanupStaging(string dbUserConn)
+        private static async Task CleanupStaging(string dbConn)
         {
             try
             {
-                await DBHelper.ExecuteNonQuery(dbUserConn, "TRUNCATE TABLE Users.dbo.iSMSOverdue_InvoiceTemp;");
+                await DBHelper.ExecuteNonQuery(dbConn, "TRUNCATE TABLE Users.dbo.iSMSOverdue_InvoiceTemp;");
                 _log.Info("Staging truncated.");
             }
             catch (Exception ex)
@@ -475,7 +475,7 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
                 _log.Warn(ex, "TRUNCATE staging failed. Trying DELETE...");
                 try
                 {
-                    await DBHelper.ExecuteNonQuery(dbUserConn, "DELETE FROM Users.dbo.iSMSOverdue_InvoiceTemp;");
+                    await DBHelper.ExecuteNonQuery(dbConn, "DELETE FROM Users.dbo.iSMSOverdue_InvoiceTemp;");
                     _log.Info("Staging deleted.");
                 }
                 catch (Exception ex2)

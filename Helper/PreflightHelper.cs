@@ -12,7 +12,7 @@ namespace iSMSOverdue.InboundInvoice.Helper
     public sealed class PreflightResult
     {
         public Dictionary<string, string> DbMain;
-        public List<string> DbUser;
+        public List<string> Db;
         public string SqlMain;
         public string SqlFile;
         public BucketMapperModel Map;
@@ -31,7 +31,7 @@ namespace iSMSOverdue.InboundInvoice.Helper
             ValidateAwsKeyDecrypt(cfg.FileKeyLocker);
 
             var dbMain = ResolveDbMain(cfg.DBConnectionMain);
-            var dbUser = ResolveDbUser(cfg.DBConnection);
+            var db = ResolveDbUser(cfg.DBConnection);
 
             var sqlMain = ReadSqlIfExists(cfg.FileQueryMain);
             var sqlFile = ReadSqlIfExists(cfg.FileQuery);
@@ -43,7 +43,7 @@ namespace iSMSOverdue.InboundInvoice.Helper
             return new PreflightResult
             {
                 DbMain = dbMain,
-                DbUser = dbUser,
+                Db = db,
                 SqlMain = sqlMain,
                 SqlFile = sqlFile,
                 Map = map,
