@@ -38,11 +38,16 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
                 if (!Directory.Exists(primaryInbound)) Directory.CreateDirectory(primaryInbound);
 
                 var map = pre.Map; // inbound row for this job
-                _log.Info($"Download file from S3 started for bucket={map.bucket_name}, prefix={map.prefix}");
+                // _log.Info($"Download file from S3 started for bucket={map.bucket_name}, prefix={map.prefix}");
+                _log.Info($"Download file from S3 started");
 
                 var downloads = await S3Helper.Download(map, cfg.FileKeyLocker, primaryInbound);
                 _log.Info($"✅ files downloaded from s3: {downloads.Count(x => x.status)}");
-                _log.Info($"⛔ files failed from s3: {downloads.Count(x => !x.status)}");
+
+                if (downloads.Count(x => !x.status) > 0)
+                {
+                    _log.Info($"⛔ files failed from s3: {downloads.Count(x => !x.status)}");
+                }
 
                 // replicate to other shares (skip empty)
                 var shares = uploadPaths.Skip(1).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
@@ -193,8 +198,7 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
 
             var env = ConfigurationManager.AppSettings["Environment"] ?? "DEV";
 
-            //dev log:
-            _log.Info($"stagingAreas: {string.Join(", ", stagingAreas)}");
+            // _log.Info($"stagingAreas: {string.Join(", ", stagingAreas)}");
 
             // ===================== FINAL EXECUTION =====================
             foreach (var kv in pre.DbMain)
@@ -202,16 +206,16 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
                 var areaCode = kv.Key;
 
                 // must exist in staging
-                // if (!stagingAreas.Contains(areaCode))
-                // {
-                //     _log.Info($"Skip area {areaCode}: not found in staging");
-                //     continue;
-                // }
+                if (!stagingAreas.Contains(areaCode))
+                {
+                    // _log.Info($"Skip area {areaCode}: not found in staging");
+                    continue;
+                }
 
                 // must exist in Db
                 if (!dbMap.TryGetValue(areaCode, out var conn))
                 {
-                    _log.Warn($"Skip area {areaCode}: not found in Db catalog");
+                    // _log.Warn($"Skip area {areaCode}: not found in Db catalog");
                     continue;
                 }
 
@@ -220,7 +224,7 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
                     ? fileByArea[areaCode]
                     : "batch";
 
-                _log.Info($"Processing area {areaCode} | DB={dbName} | FILE={fileForArea}");
+                _log.Info($"Processing area {areaCode} | DB={dbName}");
 
                 // ===================== SQL Main =====================
                 if (!string.IsNullOrWhiteSpace(pre.SqlMain))
