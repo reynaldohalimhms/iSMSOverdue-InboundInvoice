@@ -222,21 +222,21 @@ namespace iSMSOverdue.InboundInvoice.Service.Inbound
 
                 _log.Info($"Processing area {areaCode} | DB={dbName} | FILE={fileForArea}");
 
-                // ===================== COUNTER =====================
+                // ===================== SQL Main =====================
                 if (!string.IsNullOrWhiteSpace(pre.SqlMain))
                 {
                     try
                     {
                         await DBHelper.ExecuteNonQuery(conn, pre.SqlMain);
-                        _log.Info($"Counter executed for area {areaCode}.");
+                        _log.Info($"SQL main executed for area {areaCode}.");
                     }
                     catch (Exception ex)
                     {
-                        _log.Error(ex, $"Counter failed for area {areaCode}.");
+                        _log.Error(ex, $"SQL main failed for area {areaCode}.");
                     }
                 }
 
-                // ===================== MAIN SQL =====================
+                // ===================== SQL =====================
                 if (!string.IsNullOrWhiteSpace(pre.SqlFile))
                 {
                     var raw = pre.SqlFile;
